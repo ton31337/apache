@@ -1,0 +1,34 @@
+--- httpd-2.2.27/server/mpm/worker/pod.c  2014-07-17 05:37:42.066286903 -0400
++++ httpd-2.2.27/server/mpm/worker/pod.c 2014-07-17 05:37:02.778226497 -0400
+@@ -46,12 +43,27 @@ AP_DECLARE(int) ap_mpm_pod_check(ap_pod_
+     char c;
+     apr_os_file_t fd;
+     int rc;
++    // Donatas 2014-07-17
++    int r = 0;
++    fd_set readfd;
++    struct timeval tv;
++
++    tv.tv_sec = 5;
++    tv.tv_usec = 0;
++    FD_ZERO(&readfd);
++    // Donatas 2014-07-17
+
+-    /* we need to surface EINTR so we'll have to grab the
+-     * native file descriptor and do the OS read() ourselves
+-     */
+     apr_os_file_get(&fd, pod->pod_in);
+-    rc = read(fd, &c, 1);
++    // Donatas 2014-07-17
++    FD_SET(fd, &readfd);
++    r = select(fd+2, &readfd, NULL, NULL, &tv);
++    if(r) {
++      if(FD_ISSET(fd, &readfd))
++        rc = read(fd, &c, 1);
++    } else {
++      return AP_GRACEFUL;
++    }
++    // Donatas 2014-07-17
+     if (rc == 1) {
+         switch(c) {
+         case RESTART_CHAR:
