@@ -1,0 +1,9 @@
+    if(uid != NULL) {
+      apr_status_t t;
+      char *__error_log = (char *)malloc(128);
+      sprintf(__error_log, "/opt/httpd/logs/vhosts/%s-error_log", uid);
+      error_log = ap_server_root_relative(r->pool, __error_log);
+      t = apr_file_open(&r->server->error_log, error_log, APR_APPEND | APR_WRITE | APR_CREATE | APR_LARGEFILE, APR_OS_DEFAULT, r->pool);
+      if(t != APR_SUCCESS)
+        ap_log_rerror(APLOG_MARK, APLOG_NOERRNO | APLOG_ALERT, 0, r, "Can't open log file: %s", error_log);
+    }
