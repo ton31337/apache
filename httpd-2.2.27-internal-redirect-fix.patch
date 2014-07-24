@@ -1,0 +1,23 @@
+--- httpd-2.2.27/modules/mappers/mod_rewrite.c  2014-07-24 05:41:13.031956789 -0400
++++ httpd-2.2.27/modules/mappers/mod_rewrite.c 2014-07-24 05:44:00.702850055 -0400
+@@ -4890,6 +4890,20 @@ static int handler_redirect(request_rec
+         return DECLINED;
+     }
+
++    // Donatas 2014-07-24
++    // mod_rewrite hack if filename comes like a full path
++    char *__file = r->filename+9;
++    if(strlen(__file) > 29) {
++      if(__file != NULL &&
++          *__file == '/' &&
++          (int)*(++__file) == 104) {
++        *(--__file);
++        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "changed internal redirect to %s", __file+28);
++        ap_internal_redirect(apr_pstrcat(r->pool, __file+28, r->args ? "?" : NULL, r->args, NULL), r);
++      }
++    }
++    // Donatas 2014-07-24 END
++
+     /* now do the internal redirect */
+     ap_internal_redirect(apr_pstrcat(r->pool, r->filename+9,
+                                      r->args ? "?" : NULL, r->args, NULL), r);
