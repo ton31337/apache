@@ -156,22 +156,23 @@ static int hostprotect_handler(request_rec *r)
       apr_skiplist_set_compare(sl, compare, compare);
       apr_skiplist_find(sl, (void *)client_ip, &found);
       if(found != NULL) {
-        if(!strcmp((char *)found->data, client_ip)) {
-          rbl_status = 1;
-          goto rbl_err;
-        }
+        rbl_status = 1;
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect Found match with client_ip %s", (char *)found->data);
+        goto rbl_err;
+      } else {
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect Not found match with client_ip");
       }
       ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect enabled, checking RBL for IP %s", client_ip);
       check_rbl(client_ip, hp.resolver, &rbl_status);
 
-      rbl_err:
       if(rbl_status) {
         node = apr_skiplist_insert_compare(sl, (void *)client_ip, compare);
         if(node != NULL)
           ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect Added IP (%s) to cache!", client_ip);
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect IP (%s) is blacklisted!", client_ip);
-        ap_set_content_type(r, "text/html");
-        ap_rprintf(r, "<html><head><title>Your IP is blacklisted in bl.hostprotect.net - redirecting..</title><META http-equiv='refresh' content='3;URL=http://www.hostprotect.net/'></head><body bgcolor='#ffffff'><center>Your IP is blacklisted in bl.hostprotect.net. You will be redirected automatically in 3 seconds.</center></body></html>");
+        rbl_err:
+          ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect IP (%s) is blacklisted!", client_ip);
+          ap_set_content_type(r, "text/html");
+          ap_rprintf(r, "<html><head><title>Your IP is blacklisted in bl.hostprotect.net - redirecting..</title><META http-equiv='refresh' content='3;URL=http://www.hostprotect.net/'></head><body bgcolor='#ffffff'><center>Your IP is blacklisted in bl.hostprotect.net. You will be redirected automatically in 3 seconds.</center></body></html>");
         return OK;
       }
     }
