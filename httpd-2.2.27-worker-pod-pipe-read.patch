@@ -1,4 +1,4 @@
---- httpd-2.2.27/server/mpm/worker/pod.c  2014-07-17 05:37:42.066286903 -0400
+--- httpd-2.2.27/server/mpm/worker/pod.c 2014-07-17 05:37:42.066286903 -0400
 +++ httpd-2.2.27/server/mpm/worker/pod.c 2014-07-17 05:37:02.778226497 -0400
 @@ -46,12 +43,27 @@ AP_DECLARE(int) ap_mpm_pod_check(ap_pod_
      char c;
@@ -32,3 +32,43 @@
      if (rc == 1) {
          switch(c) {
          case RESTART_CHAR:
+
+--- httpd-2.2.27/server/mpm/worker/worker.c 2014-08-04 09:16:44.195039024 -0400
++++ httpd-2.2.27/server/mpm/worker/worker.c 2014-08-04 09:13:48.031149155 -0400
+@@ -1254,6 +1254,7 @@ static void child_main(int child_num_arg
+          */
+         unblock_signal(SIGTERM);
+         apr_signal(SIGTERM, dummy_signal_handler);
++        int skip = 0;
+         /* Watch for any messages from the parent over the POD */
+         while (1) {
+             rv = ap_mpm_pod_check(pod);
+@@ -1272,8 +1273,16 @@ static void child_main(int child_num_arg
+                 /* make sure the start thread has finished;
+                  * signal_threads() and join_workers depend on that
+                  */
+-                join_start_thread(start_thread_id);
+-                signal_threads(rv == AP_GRACEFUL ? ST_GRACEFUL : ST_UNGRACEFUL);
++                /*
++                 * Donatas <donatas@hostinger.com>
++                 * Avoid joining killed thread, because it leads to deadlock
++                 */
++                skip = 1;
++#ifdef HAVE_PTHREAD_KILL
++                pthread_kill(*listener_os_thread, ST_GRACEFUL);
++#else
++                kill(ap_my_pid, ST_GRACEFUL);
++#endif
+                 break;
+             }
+         }
+@@ -1285,7 +1294,8 @@ static void child_main(int child_num_arg
+          *   If the worker hasn't exited, then this blocks until
+          *   they have (then cleans up).
+          */
+-        join_workers(ts->listener, threads);
++        if(!skip)
++          join_workers(ts->listener, threads);
+     }
+
+     free(threads);
