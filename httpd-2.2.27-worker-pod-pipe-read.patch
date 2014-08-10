@@ -1,5 +1,5 @@
---- httpd-2.2.27/server/mpm/worker/worker.c 2014-08-04 09:16:44.195039024 -0400
-+++ httpd-2.2.27/server/mpm/worker/worker.c 2014-08-04 09:13:48.031149155 -0400
+--- httpd-2.2.27/server/mpm/worker/worker.c 2014-08-07 06:04:52.282532895 -0400
++++ httpd-2.2.27/server/mpm/worker/worker.c 2014-08-07 06:03:07.862946931 -0400
 @@ -1254,6 +1254,7 @@ static void child_main(int child_num_arg
           */
          unblock_signal(SIGTERM);
@@ -8,26 +8,16 @@
          /* Watch for any messages from the parent over the POD */
          while (1) {
              rv = ap_mpm_pod_check(pod);
-@@ -1272,8 +1273,16 @@ static void child_main(int child_num_arg
-                 /* make sure the start thread has finished;
-                  * signal_threads() and join_workers depend on that
+@@ -1274,6 +1275,8 @@ static void child_main(int child_num_arg
                   */
--                join_start_thread(start_thread_id);
--                signal_threads(rv == AP_GRACEFUL ? ST_GRACEFUL : ST_UNGRACEFUL);
-+                /*
-+                 * Donatas <donatas@hostinger.com>
-+                 * Avoid joining killed thread, because it leads to deadlock
-+                 */
+                 join_start_thread(start_thread_id);
+                 signal_threads(rv == AP_GRACEFUL ? ST_GRACEFUL : ST_UNGRACEFUL);
++                /* Hack to avoid deadlock on futex() */
 +                skip = 1;
-+#ifdef HAVE_PTHREAD_KILL
-+                pthread_kill(*listener_os_thread, ST_GRACEFUL);
-+#else
-+                kill(ap_my_pid, ST_GRACEFUL);
-+#endif
                  break;
              }
          }
-@@ -1285,7 +1294,8 @@ static void child_main(int child_num_arg
+@@ -1285,7 +1288,8 @@ static void child_main(int child_num_arg
           *   If the worker hasn't exited, then this blocks until
           *   they have (then cleans up).
           */
