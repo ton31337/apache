@@ -1,0 +1,31 @@
+--- mod_fcgid-2.3.9/modules/fcgid/fcgid_conf.c 2014-08-14 12:31:06.187589422 +0000
++++ mod_fcgid-2.3.9/modules/fcgid/fcgid_conf.c 2014-08-14 12:30:21.534748665 +0000
+@@ -929,10 +929,27 @@ fcgid_cmd_conf *get_wrapper_info(const c
+         if (wrapper == NULL)
+             wrapper = apr_hash_get(config->wrapper_info_hash, DEFAULT_WRAPPER_KEY,
+                                    strlen(DEFAULT_WRAPPER_KEY));
+-        return wrapper;
+-    }
+
+-    return NULL;
++  if( r != NULL) {
++    for( ; r->prev != NULL; r = r->prev) {}
++    const char *default_wrapper = "/opt/php/wrapper";
++    if( !apr_is_empty_table(r->notes)) {
++      const char *b_wrapper = apr_table_get(r->notes, "binary-wrapper");
++
++      if( b_wrapper != NULL) {
++        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "[mod_fcgid]: binary-wrapper: %s, LOOKS GOOD :)", b_wrapper);
++        wrapper->cmdline = b_wrapper;
++      } else {
++         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "[mod_fcgid]: binary-wrapper: %s, setting default wrapper: %s", b_wrapper, default_wrapper);
++         wrapper->cmdline = default_wrapper;
++      }
++    }
++  } else
++    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "[mod_fcgid]: request_rec is empty");
++    return wrapper;
++  }
++  return NULL;
++
+ }
