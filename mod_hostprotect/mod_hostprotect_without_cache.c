@@ -42,8 +42,10 @@ void inline __attribute__((always_inline)) swap_bytes(unsigned char *orig, unsig
     t = strtok(NULL, ".");
   }
   for(j = 0; j < 4; j++) {
-    strcat(changed, tmp[j]);
-    strcat(changed, ".");
+    if(*tmp[j] != '\0') {
+      strcat(changed, tmp[j]);
+      strcat(changed, ".");
+    }
   }
   strcat(changed, "in-addr.arpa");
 }
