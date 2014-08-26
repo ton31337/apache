@@ -135,7 +135,7 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
         if(hp.debug)
           ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, req, "%s: %d bytes received from server for %s", MODULE_NAME, bytes_recv, ip);
 
-        if(bytes_recv != 78)
+        if(bytes_recv > 80)
           goto err_go;
 
         qname = (unsigned char*)&buf[sizeof(struct dns_header)];
