@@ -31,18 +31,20 @@ struct hostprotect hp;
 
 module AP_MODULE_DECLARE_DATA hostprotect_module;
 
-void inline __attribute__((always_inline)) swap_bytes(unsigned char *orig, unsigned char *changed)
+void inline __attribute__((always_inline)) swap_bytes(unsigned char *orig, char *changed, request_rec *r)
 {
   int i = 3;
   int j;
-  char *tmp[4];
-  char *t = strtok(strdup(orig), ".");
+  char *tmp[4] = {0};
+  char *t = strtok(strndup(orig, 15), ".");
+
   while(t != NULL) {
     tmp[i--] = t;
     t = strtok(NULL, ".");
   }
+
   for(j = 0; j < 4; j++) {
-    if(*tmp[j] != '\0') {
+    if(tmp[j] != NULL) {
       strcat(changed, tmp[j]);
       strcat(changed, ".");
     }
