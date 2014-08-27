@@ -1,3 +1,4 @@
+#define MODULE_NAME "hostprotect"
 #define DEFAULT_RESOLVER "31.220.19.20"
 
 /* DNS */
@@ -35,39 +36,13 @@ struct dns_answer
   unsigned char *data; // 32 bits
 };
 
-/* Skip list */
-struct apr_skiplist {
-  apr_skiplist_compare compare;
-  apr_skiplist_compare comparek;
-  int height;
-  int preheight;
-  int size;
-  apr_skiplistnode *top;
-  apr_skiplistnode *bottom;
-  apr_skiplistnode *topend;
-  apr_skiplistnode *bottomend;
-  apr_skiplist *index;
-  apr_array_header_t *memlist;
-  apr_pool_t *pool;
-};
-
-struct apr_skiplistnode {
-  void *data;
-  apr_skiplistnode *next;
-  apr_skiplistnode *prev;
-  apr_skiplistnode *down;
-  apr_skiplistnode *up;
-  apr_skiplistnode *previndex;
-  apr_skiplistnode *nextindex;
-  apr_skiplist *sl;
-};
-
 /* Hosprotect */
 struct hostprotect {
     unsigned char enabled:1;
+    unsigned char debug:1;
     char resolver[15];
 };
 
 void inline __attribute__((always_inline)) swap_bytes(unsigned char *, unsigned char *);
 char inline __attribute__((always_inline)) *change_to_dns_format(unsigned char *);
-static void check_rbl(char *, char *, int *);
+static void check_rbl(char *, char *, int *, request_rec *);

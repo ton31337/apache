@@ -1,7 +1,12 @@
 /*
 
-   mod_hostprotect module for Apache
-   Donatas Abraitis <donatas@hostinger.com>
+  mod_hostprotect module for Apache
+  Donatas Abraitis <donatas@hostinger.com>
+
+  LoadModule hostprotect_module modules/mod_hostprotect.so
+  HostProtect "On"
+  HostProtectResolver "10.2.1.251"
+  HostProtectDebug "On"
 
 */
 
@@ -23,31 +28,26 @@
 #include "mod_hostprotect.h"
 
 struct hostprotect hp;
-apr_skiplist *sl;
-apr_skiplistnode *node;
 
 module AP_MODULE_DECLARE_DATA hostprotect_module;
 
-static int compare(void *a, void *b)
-{
-  void *ac = (void *) (((apr_skiplist *) a)->compare);
-  void *bc = (void *) (((apr_skiplist *) b)->compare);
-  return ((ac < bc) ? -1 : ((ac > bc) ? 1 : 0));
-}
-
-void inline __attribute__((always_inline)) swap_bytes(unsigned char *orig, unsigned char *changed)
+void inline __attribute__((always_inline)) swap_bytes(unsigned char *orig, char *changed, request_rec *r)
 {
   int i = 3;
   int j;
-  char *tmp[4];
-  char *t = strtok(strdup(orig), ".");
+  char *tmp[4] = {0};
+  char *t = strtok(strndup(orig, 15), ".");
+
   while(t != NULL) {
     tmp[i--] = t;
     t = strtok(NULL, ".");
   }
+
   for(j = 0; j < 4; j++) {
-    strcat(changed, tmp[j]);
-    strcat(changed, ".");
+    if(tmp[j] != NULL) {
+      strcat(changed, tmp[j]);
+      strcat(changed, ".");
+    }
   }
   strcat(changed, "in-addr.arpa");
 }
@@ -88,7 +88,7 @@ char inline __attribute__((always_inline)) *change_to_dns_format(unsigned char *
   return ip;
 }
 
-static void check_rbl(char *ip, char *resolver, int *status)
+static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
 {
   int s;
   int r;
@@ -105,8 +105,8 @@ static void check_rbl(char *ip, char *resolver, int *status)
   char *packet;
   fd_set readfds;
 
-  tv.tv_sec = 10;
-  tv.tv_usec = 500000;
+  tv.tv_sec = 0;
+  tv.tv_usec = 5000;
   FD_ZERO(&readfds);
 
   s = socket(PF_INET, SOCK_DGRAM|SOCK_NONBLOCK, IPPROTO_IP);
@@ -127,54 +127,55 @@ static void check_rbl(char *ip, char *resolver, int *status)
   r = select(s+1, &readfds, NULL, NULL, &tv);
   if(r) {
     if(FD_ISSET(s, &readfds)) {
-      recv(s, buf, sizeof(buf), 0);
-      qname = (unsigned char*)&buf[sizeof(struct dns_header)];
-      reader = &buf[sizeof(struct dns_header) + (strlen(qname)+1) + sizeof(struct dns_question)];
+      int bytes_recv = recv(s, buf, sizeof(buf), 0);
+      /* don't forget to close the socket, because you will reach socket limit by pid */
+      close(s);
+      if(bytes_recv) {
+        /* if debug */
+        if(hp.debug)
+          ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, req, "%s: %d bytes received from server for %s", MODULE_NAME, bytes_recv, ip);
+
+        if(bytes_recv > 80)
+          goto err_go;
+
+        qname = (unsigned char*)&buf[sizeof(struct dns_header)];
+        reader = &buf[sizeof(struct dns_header) + (strlen(qname)+1) + sizeof(struct dns_question)];
+      }
     }
   }
 
   ans = (struct dns_answer *)reader;
-  ans->data = (unsigned char *) malloc(ntohs(ans->rdlength));
-  for(j; j < ntohs(ans->rdlength); j++)
-    ans->data[j] = reader[j];
+  if(ans != NULL) {
+    ans->data = (unsigned char *) malloc(ntohs(ans->rdlength));
+    for(j; j < ntohs(ans->rdlength); j++)
+      ans->data[j] = reader[j];
 
-  if(ans->data[p++] == '1' && ans->data[++p] == 'b')
-    *status = 1;
+    if(ans->data[p++] == '1' && ans->data[++p] == 'b')
+      *status = 1;
+  }
+
+  err_go:
+    return;
 
 }
-
 static int hostprotect_handler(request_rec *r)
 {
   char *client_ip;
   int is_ip = 0;
   int rbl_status = 0;
-  ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect enabled: %d, Resolver IP: %s", hp.enabled, hp.resolver);
   if(hp.enabled == 1) {
     client_ip = ap_get_remote_host(r->connection, r->per_dir_config, REMOTE_NAME, &is_ip);
     if(is_ip) {
-      apr_skiplistnode *found;
-      apr_skiplist_set_compare(sl, compare, compare);
-      apr_skiplist_find(sl, (void *)client_ip, &found);
-      if(found != NULL) {
-        rbl_status = 1;
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect Found match with client_ip %s", (char *)found->data);
-        goto rbl_err;
-      } else {
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect Not found match with client_ip");
-      }
-      ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect enabled, checking RBL for IP %s", client_ip);
-      check_rbl(client_ip, hp.resolver, &rbl_status);
-
-      if(rbl_status) {
-        node = apr_skiplist_insert_compare(sl, (void *)client_ip, compare);
-        if(node != NULL)
-          ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect Added IP (%s) to cache!", client_ip);
-        rbl_err:
-          ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "HostProtect IP (%s) is blacklisted!", client_ip);
+      if(hp.debug)
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "%s: checking for %s", MODULE_NAME, client_ip);
+        check_rbl(client_ip, hp.resolver, &rbl_status, r);
+        if(rbl_status) {
+          if(hp.debug)
+            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "%s: %s blacklisted!", MODULE_NAME, client_ip);
           ap_set_content_type(r, "text/html");
           ap_rprintf(r, "<html><head><title>Your IP is blacklisted in bl.hostprotect.net - redirecting..</title><META http-equiv='refresh' content='3;URL=http://www.hostprotect.net/'></head><body bgcolor='#ffffff'><center>Your IP is blacklisted in bl.hostprotect.net. You will be redirected automatically in 3 seconds.</center></body></html>");
-        return OK;
-      }
+          return OK;
+        }
     }
   }
   return DECLINED;
@@ -183,7 +184,6 @@ static int hostprotect_handler(request_rec *r)
 static void hostprotect_module_register_hooks(apr_pool_t *p)
 {
   ap_hook_handler(hostprotect_handler, NULL, NULL, APR_HOOK_FIRST);
-  apr_skiplist_init(&sl, NULL);
 }
 
 static const char *enable_hostprotect(cmd_parms *cmd, void *cfg, const char arg[])
@@ -205,10 +205,20 @@ static const char *resolver_hostprotect(cmd_parms *cmd, void *cfg, const char ar
   return NULL;
 }
 
+static const char *debug_hostprotect(cmd_parms *cmd, void *cfg, const char arg[])
+{
+  hp.debug = 0;
+  if(arg != NULL && !strncmp(arg, "On", 2)) {
+    hp.debug = 1;
+  }
+  return NULL;
+}
+
 static const command_rec hostprotect_module_directives[] =
 {
   AP_INIT_TAKE1("HostProtect", enable_hostprotect, NULL, RSRC_CONF, "Enable/Disable HostProtect module."),
   AP_INIT_TAKE1("HostProtectResolver", resolver_hostprotect, NULL, RSRC_CONF, "Set resolver IP for HostProtect module."),
+  AP_INIT_TAKE1("HostProtectDebug", debug_hostprotect, NULL, RSRC_CONF, "Enable/Disable debug level."),
   {NULL}
 };
 
