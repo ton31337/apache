@@ -128,8 +128,6 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
   if(r) {
     if(FD_ISSET(s, &readfds)) {
       int bytes_recv = recv(s, buf, sizeof(buf), 0);
-      /* don't forget to close the socket, because you will reach socket limit by pid */
-      close(s);
       if(bytes_recv) {
         /* if debug */
         if(hp.debug)
@@ -155,6 +153,8 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
   }
 
   err_go:
+    /* don't forget to close the socket, because you will reach socket limit by pid */
+    close(s);
     return;
 
 }
