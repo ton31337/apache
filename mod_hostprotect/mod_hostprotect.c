@@ -144,8 +144,9 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
 
   ans = (struct dns_answer *)reader;
   if(ans != NULL) {
-    ans->data = (unsigned char *) malloc(ntohs(ans->rdlength));
-    for(j; j < ntohs(ans->rdlength); j++)
+    int size_a = ntohs(ans->rdlength);
+    ans->data = (unsigned char *) malloc(size_a);
+    for(j; j < size_a; j++)
       ans->data[j] = reader[j];
 
     if(ans->data[p++] == '1' && ans->data[++p] == 'b')
