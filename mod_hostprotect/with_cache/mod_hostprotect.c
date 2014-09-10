@@ -3,14 +3,9 @@
   mod_hostprotect module for Apache
   Donatas Abraitis <donatas@hostinger.com>
 
-  Compile:
-  apxs -i -c mod_hostprotect.c
-
-  httpd.conf:
   LoadModule hostprotect_module modules/mod_hostprotect.so
   HostProtect "On"
   HostProtectResolver "10.2.1.251"
-  HostProtectPurger "10.2.1.250"
   HostProtectDebug "On"
 
 */
@@ -29,6 +24,7 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/socket.h>
+#include <sys/poll.h>
 #include <sys/un.h>
 #include "mod_hostprotect.h"
 
@@ -109,7 +105,6 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
   int j = 0;
   int p = 13;
   struct sockaddr_in addr;
-  struct timeval tv;
   char buf[65536];
   char host[64];
   unsigned char *qname;
@@ -117,14 +112,14 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
   struct dns_header *dns;
   unsigned char *reader = NULL;
   char *packet;
-  fd_set readfds;
-
-  tv.tv_sec = 1;
-  tv.tv_usec = 5000;
-  FD_ZERO(&readfds);
+  struct pollfd fds[1];
 
   s = socket(PF_INET, SOCK_DGRAM|SOCK_NONBLOCK, IPPROTO_IP);
-  FD_SET(s, &readfds);
+  if(!s)
+    goto err_go;
+
+  fds[0].fd = s;
+  fds[0].events = POLLIN;
 
   memset(buf, 0, sizeof(buf));
   memset(&addr, 0, sizeof(addr));
@@ -138,9 +133,9 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
   connect(s, (struct sockaddr *)&addr, sizeof(addr));
   send(s, (void *)packet, 48, MSG_NOSIGNAL);
 
-  r = select(s+1, &readfds, NULL, NULL, &tv);
+  r = poll(fds, 1, 5000);
   if(r) {
-    if(FD_ISSET(s, &readfds)) {
+    if(fds[0].revents & POLLIN) {
       int bytes_recv = recv(s, buf, sizeof(buf), 0);
       if(bytes_recv) {
         if(hp.debug)
@@ -153,13 +148,18 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
         qname = (unsigned char*)&buf[sizeof(struct dns_header)];
         reader = &buf[sizeof(struct dns_header) + (strlen(qname)+1) + sizeof(struct dns_question)];
       }
+    } else {
+      goto err_go;
     }
+  } else {
+    goto err_go;
   }
 
   ans = (struct dns_answer *)reader;
   if(ans != NULL) {
-    ans->data = (unsigned char *) malloc(ntohs(ans->rdlength));
-    for(j; j < ntohs(ans->rdlength); j++)
+    int size_a = ntohs(ans->rdlength);
+    ans->data = (unsigned char *) malloc(size_a);
+    for(j; j < size_a; j++)
       ans->data[j] = reader[j];
 
     if(ans->data[p++] == '1' && ans->data[++p] == 'b')
