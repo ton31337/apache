@@ -1,6 +1,7 @@
 #define MODULE_NAME "hostprotect"
 #define DEFAULT_RESOLVER "31.220.23.12"
 #define DEFAULT_PURGER "31.220.23.11"
+#define SHM_SIZE (sizeof(struct hdata))
 
 /* DNS */
 struct dns_header
@@ -37,42 +38,131 @@ struct dns_answer
   unsigned char *data; // 32 bits
 };
 
-/* Skip list */
-struct apr_skiplist {
-  apr_skiplist_compare compare;
-  apr_skiplist_compare comparek;
-  int height;
-  int preheight;
-  int size;
-  apr_skiplistnode *top;
-  apr_skiplistnode *bottom;
-  apr_skiplistnode *topend;
-  apr_skiplistnode *bottomend;
-  apr_skiplist *index;
-  apr_array_header_t *memlist;
-  apr_pool_t *pool;
-};
-
-struct apr_skiplistnode {
-  void *data;
-  apr_skiplistnode *next;
-  apr_skiplistnode *prev;
-  apr_skiplistnode *down;
-  apr_skiplistnode *up;
-  apr_skiplistnode *previndex;
-  apr_skiplistnode *nextindex;
-  apr_skiplist *sl;
-};
-
 /* Hosprotect */
 struct hostprotect {
-    unsigned char enabled:1;
-    unsigned char debug:1;
-    char resolver[16];
-    char purger[16];
+  unsigned char enabled:1;
+  unsigned char debug:1;
+  char purger[16];
+  char resolver[16];
+} hp;
+
+struct hdata {
+  int counter;
+  char ip[16];
+};
+
+enum {
+  FOUND,
+  NOT_FOUND,
+  SHM_OK,
+  SHM_ERR,
+  PURGE_OK,
+  PURGE_ERR
 };
 
 void inline __attribute__((always_inline)) swap_bytes(unsigned char *, char *);
 char inline __attribute__((always_inline)) *change_to_dns_format(unsigned char *);
 static void check_rbl(char *, char *, int *, request_rec *);
-static int compare(void *, void *);
+static int search_shm(char *);
+static int update_shm(char *);
+static int purge_shm(char *);
+
+static int search_shm(char *ip) 
+{
+  struct shm_info shm_info;
+  struct shmid_ds shmds;
+  int shmid, maxkey;
+  int i = 0;
+  struct hdata *shm;
+
+  /* find the shm segment */
+  maxkey = shmctl(0, SHM_INFO, (void *) &shm_info);
+  for(i = 0; i <= maxkey; ++i) {
+
+    if((shmid = shmctl(i, SHM_STAT, &shmds)) < 0) {
+      continue;
+    }
+
+    /* shm segment found */
+    if(shmds.shm_segsz == SHM_SIZE) {
+      shm = (struct hdata *) shmat(shmid, 0, 0);
+      if(!strcmp(shm->ip, ip)) {
+        return shm->counter;
+      }
+    }
+
+  }
+  return NOT_FOUND;
+}
+
+static int update_shm(char *ip)
+{
+  struct shm_info shm_info;
+  struct shmid_ds shmds;
+  int shmid, maxkey;
+  int i = 0;
+  struct hdata *shm;
+
+  /* find the shm segment */
+  maxkey = shmctl(0, SHM_INFO, (void *) &shm_info);
+  for(i = 0; i <= maxkey; ++i) {
+
+    if((shmid = shmctl(i, SHM_STAT, &shmds)) < 0) {
+      continue;
+    }
+
+    /* shm segment found, increment counter */
+    if(shmds.shm_segsz == SHM_SIZE) {
+      shm = (struct hdata *) shmat(shmid, 0, 0);
+      if(!strcmp(shm->ip, ip)) {
+        shm->counter++;
+        return SHM_OK;
+      }
+    }
+
+  }
+
+  /* if IP is not in cache */
+  if((shmid = shmget(IPC_PRIVATE, SHM_SIZE, IPC_CREAT | 0600)) != -1) {
+    struct hdata *shm = (struct hdata *) shmat(shmid, 0, 0);
+    struct hdata *new = (struct hdata *) malloc(SHM_SIZE);
+    new->counter = 1;
+    strncpy(new->ip, ip, 15);
+    memcpy(shm, new, SHM_SIZE);  
+    return SHM_OK;
+  }
+
+  return SHM_ERR;
+}
+
+static int purge_shm(char *ip)
+{
+  struct shm_info shm_info;
+  struct shmid_ds shmds;
+  int shmid, maxkey;
+  int i = 0;
+  struct hdata *shm;
+
+  /* find the shm segment */
+  maxkey = shmctl(0, SHM_INFO, (void *) &shm_info);
+  for(i = 0; i <= maxkey; ++i) {
+
+    if((shmid = shmctl(i, SHM_STAT, &shmds)) < 0) {
+      continue;
+    }
+
+    /* shm segment found, increment counter */
+    if(shmds.shm_segsz == SHM_SIZE) {
+      shm = (struct hdata *) shmat(shmid, 0, 0);
+      if(!strcmp(shm->ip, ip)) {
+        shmdt(shm);
+        shmctl(shmid, IPC_RMID, NULL);
+        return PURGE_OK;
+      }
+    }
+
+  }
+
+  return PURGE_ERR;
+}
+
