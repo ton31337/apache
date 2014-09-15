@@ -89,8 +89,8 @@ static int search_shm(char *ip)
       shm = (struct hdata *) shmat(shmid, 0, 0);
       if(!strcmp(shm->ip, ip)) {
         counter = shm->counter;
-        shmdt(shm);
       }
+      shmdt(shm);
     }
 
   }
@@ -108,6 +108,7 @@ static int update_shm(char *ip)
   int shmid, maxkey;
   int i = 0;
   struct hdata *shm;
+  int update = 0;
 
   /* find the shm segment */
   maxkey = shmctl(0, SHM_INFO, (void *) &shm_info);
@@ -122,12 +123,15 @@ static int update_shm(char *ip)
       shm = (struct hdata *) shmat(shmid, 0, 0);
       if(!strcmp(shm->ip, ip)) {
         shm->counter++;
-        shmdt(shm);
-        return SHM_OK;
+        update = 1;
       }
+      shmdt(shm);
     }
 
   }
+
+  if(update)
+    return SHM_OK;
 
   /* if IP is not in cache */
   if((shmid = shmget(IPC_PRIVATE, SHM_SIZE, IPC_CREAT | 0600)) != -1) {
@@ -148,6 +152,7 @@ static int purge_shm(char *ip)
   int shmid, maxkey;
   int i = 0;
   struct hdata *shm;
+  int purge = 0;
 
   /* find the shm segment */
   maxkey = shmctl(0, SHM_INFO, (void *) &shm_info);
@@ -161,13 +166,16 @@ static int purge_shm(char *ip)
     if(shmds.shm_segsz == SHM_SIZE) {
       shm = (struct hdata *) shmat(shmid, 0, 0);
       if(!strcmp(shm->ip, ip)) {
-        shmdt(shm);
         shmctl(shmid, IPC_RMID, NULL);
-        return PURGE_OK;
+        purge = 1;
       }
+      shmdt(shm);
     }
 
   }
+
+  if(purge)
+    return PURGE_OK;
 
   return PURGE_ERR;
 }
