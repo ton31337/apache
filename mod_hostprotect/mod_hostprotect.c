@@ -6,6 +6,7 @@
   LoadModule hostprotect_module modules/mod_hostprotect.so
   HostProtect "On"
   HostProtectResolver "10.2.1.251"
+  HostProtectPurger "31.220.23.11"
   HostProtectDebug "On"
 
 */
@@ -27,11 +28,9 @@
 #include <sys/un.h>
 #include "mod_hostprotect.h"
 
-struct hostprotect hp;
-
 module AP_MODULE_DECLARE_DATA hostprotect_module;
 
-void inline __attribute__((always_inline)) swap_bytes(unsigned char *orig, char *changed, request_rec *r)
+void inline __attribute__((always_inline)) swap_bytes(unsigned char *orig, char *changed)
 {
   int i = 3;
   int j;
@@ -105,11 +104,14 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
   char *packet;
   fd_set readfds;
 
-  tv.tv_sec = 0;
-  tv.tv_usec = 5000;
+  tv.tv_sec = 5;
+  tv.tv_usec = 0;
   FD_ZERO(&readfds);
 
   s = socket(PF_INET, SOCK_DGRAM|SOCK_NONBLOCK, IPPROTO_IP);
+  if(!s)
+    return DECLINED;
+
   FD_SET(s, &readfds);
 
   memset(buf, 0, sizeof(buf));
@@ -129,9 +131,6 @@ static void check_rbl(char *ip, char *resolver, int *status, request_rec *req)
     if(FD_ISSET(s, &readfds)) {
       int bytes_recv = recv(s, buf, sizeof(buf), 0);
       if(bytes_recv) {
-        /* if debug */
-        if(hp.debug)
-          ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, req, "%s: %d bytes received from server for %s", MODULE_NAME, bytes_recv, ip);
 
         if(bytes_recv > 80)
           goto err_go;
@@ -167,16 +166,51 @@ static int hostprotect_handler(request_rec *r)
   if(hp.enabled == 1) {
     client_ip = ap_get_remote_host(r->connection, r->per_dir_config, REMOTE_NAME, &is_ip);
     if(is_ip) {
-      if(hp.debug)
-        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "%s: checking for %s", MODULE_NAME, client_ip);
-        check_rbl(client_ip, hp.resolver, &rbl_status, r);
-        if(rbl_status) {
+
+      /* purging */
+      if(!strcmp(client_ip, hp.purger) && !strcmp(r->method, "DELETE")) {
+
+        char *ip_to_purge = apr_table_get(r->headers_in, "X-Purge-From-BL");
+        if(ip_to_purge == NULL)
+          return DECLINED;
+
+        int purge_status = purge_shm(ip_to_purge);
+        if(purge_status == PURGE_OK) {
           if(hp.debug)
-            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "%s: %s blacklisted!", MODULE_NAME, client_ip);
+            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "%s: PURGED FROM CACHE %s", MODULE_NAME, ip_to_purge);
+        }
+        return DECLINED;
+
+      }
+
+      /* cache search */
+      int cache_hit = search_shm(client_ip);
+
+      /* cache hit */
+      if(cache_hit > 1) {
+        if(hp.debug)
+          ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "%s: CACHE HIT FOR %s (counter %d)", MODULE_NAME, client_ip, cache_hit);
+        update_shm(client_ip);
+        rbl_status = 1;
+        goto err_redirect;
+      } else {
+
+        /* cache miss */
+        check_rbl(client_ip, hp.resolver, &rbl_status, r);
+        if(hp.debug)
+          ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "%s: Checking for blacklist %s | status %d", MODULE_NAME, client_ip, rbl_status);
+
+err_redirect:
+        /* blacklisted */
+        if(rbl_status) {
+          update_shm(client_ip);
           ap_set_content_type(r, "text/html");
-          ap_rprintf(r, "<html><head><title>Your IP is blacklisted in bl.hostprotect.net - redirecting..</title><META http-equiv='refresh' content='3;URL=http://www.hostprotect.net/'></head><body bgcolor='#ffffff'><center>Your IP is blacklisted in bl.hostprotect.net. You will be redirected automatically in 3 seconds.</center></body></html>");
+          ap_rprintf(r, "<html><head><title>Your IP is blacklisted in bl.hostprotect.net - redirecting..</title><META http-equiv='refresh' content='1;URL=http://www.hostprotect.net/'></head><body bgcolor='#ffffff'><center>Your IP is blacklisted in bl.hostprotect.net. You will be redirected automatically in 3 seconds.</center></body></html>");
           return OK;
         }
+
+      }
+
     }
   }
   return DECLINED;
@@ -185,11 +219,12 @@ static int hostprotect_handler(request_rec *r)
 static void hostprotect_module_register_hooks(apr_pool_t *p)
 {
   ap_hook_handler(hostprotect_handler, NULL, NULL, APR_HOOK_FIRST);
+  hp.enabled = 0;
+  hp.debug = 0;
 }
 
 static const char *enable_hostprotect(cmd_parms *cmd, void *cfg, const char arg[])
 {
-  hp.enabled = 0;
   if(arg != NULL && !strncmp(arg, "On", 2)) {
     hp.enabled = 1;
     strncpy(hp.resolver, DEFAULT_RESOLVER, strlen(DEFAULT_RESOLVER));
@@ -206,9 +241,17 @@ static const char *resolver_hostprotect(cmd_parms *cmd, void *cfg, const char ar
   return NULL;
 }
 
+static const char *purger_hostprotect(cmd_parms *cmd, void *cfg, const char arg[])
+{
+  if(arg != NULL && strlen(arg) < 16) {
+    memset(hp.purger, 0, sizeof(hp.purger));
+    strncpy(hp.purger, arg, strlen(arg));
+  }
+  return NULL;
+}
+
 static const char *debug_hostprotect(cmd_parms *cmd, void *cfg, const char arg[])
 {
-  hp.debug = 0;
   if(arg != NULL && !strncmp(arg, "On", 2)) {
     hp.debug = 1;
   }
@@ -219,6 +262,7 @@ static const command_rec hostprotect_module_directives[] =
 {
   AP_INIT_TAKE1("HostProtect", enable_hostprotect, NULL, RSRC_CONF, "Enable/Disable HostProtect module."),
   AP_INIT_TAKE1("HostProtectResolver", resolver_hostprotect, NULL, RSRC_CONF, "Set resolver IP for HostProtect module."),
+  AP_INIT_TAKE1("HostProtectPurger", purger_hostprotect, NULL, RSRC_CONF, "Set IP which can purge data from cache."),
   AP_INIT_TAKE1("HostProtectDebug", debug_hostprotect, NULL, RSRC_CONF, "Enable/Disable debug level."),
   {NULL}
 };
